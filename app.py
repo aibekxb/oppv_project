@@ -4,29 +4,43 @@ from flask import Flask, render_template, request
 
 app = Flask(__name__)
 
-def clean_fio(raw_text):
-    """Аты-жөнін артық таңбалардан тазалау функциясы"""
-    if not raw_text:
+def extract_fio_smart(text):
+    """Мәтіннен Аты-жөнін БЖЗҚ құжатының құрылымына сай дәл тауып алу функциясы"""
+    if not text:
         return "Табылмады"
     
-    # Тек бірінші жолды алу
-    fio = raw_text.split('\n')[0].strip()
+    # 1. Мәтінді таза жолдарға бөлеміз
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
     
-    # Егер басында ФИО немесе ТАӘ сөздері қалып қойса, оларды алып тастау
-    fio = re.sub(r'^(ФИО|ТАӘ|Ф.И.О|Аты-жөні)\s*', '', fio, flags=re.IGNORECASE)
-    
-    # Артық таңбаларды тазалау
-    fio = fio.strip()
-    
-    # Соңындағы жалғыз тұрған бас әріптерді (мысалы, " Т", " Ф") алып тастау
-    fio = re.sub(r'\s+[А-ЯA-ZӘІҢҒҮҰҚӨҺ]$', '', fio)
-    
-    # Максимум 3 сөзді қалдыру (Тегі Аты Әкесінің аты)
-    words = fio.split()
-    if len(words) > 3:
-        fio = " ".join(words[:3])
-        
-    return fio
+    for i, line in enumerate(lines):
+        # Егер жолдан ФИО немесе ТАӘ сөздері табылса
+        if re.search(r'\b(ФИО|ТАӘ|Аты-жөні)\b', line, re.IGNORECASE):
+            
+            # А) Егер аты-жөні дәл осы жолда "ФИО" сөзінің жалғасында тұрса
+            # Мысалы: "ФИО АХМЕТОВ АКЫЛБЕК..."
+            fio_part = re.sub(r'.*?\b(ФИО|ТАӘ|Аты-жөні)\b', '', line, flags=re.IGNORECASE).strip()
+            # Тек қазақ/орыс бас әріптері мен бос орындарды қалдырамыз
+            fio_words = re.findall(r'[А-ЯӘІҢҒҮҰҚӨҺA-Z]+', fio_part)
+            
+            # Егер осы жолдан екі немесе одан көп сөз табылса (мысалы: АХМЕТОВ АКЫЛБЕК)
+            if len(fio_words) >= 2:
+                return " ".join(fio_words[:3])
+            
+            # Б) Егер "ФИО" сөзі жалғыз тұрса, аты-жөні келесі жолда деген сөз
+            # Төмендегі 1-2 жолды тексереміз
+            for j in range(i + 1, min(i + 3, len(lines))):
+                next_line = lines[j]
+                # Келесі жолдан тек қана толық бас әріппен жазылған сөздерді іздейміз
+                next_words = re.findall(r'\b[А-ЯӘІҢҒҮҰҚӨҺA-Z]{2,}\b', next_line)
+                
+                # Егер ол жолда мағынасыз сөздер болса (мысалы: "Туған күні", "ЖСН"), оны өткізіп жібереміз
+                if any(w in next_line.upper() for w in ["ТУҒАН", "ДАТА", "РОЖДЕНИЯ", "ИИН", "ЖСН"]):
+                    continue
+                    
+                if len(next_words) >= 2:
+                    return " ".join(next_words[:3])
+                    
+    return "Табылмады"
 
 def analyze_pdf(pdf_file):
     try:
@@ -37,12 +51,8 @@ def analyze_pdf(pdf_file):
             text += page.get_text() + "\n"
         doc.close()
 
-        # 1. Аты-жөнін іздеу (БЖЗҚ құжаттарына арналған күшейтілген Regex)
-        # "ФИО" сөзінен кейін кез келген бос орын немесе жол ауысуын ескереді
-        fio_match = re.search(r"(?:ФИО|ТАӘ|Аты-жөні)\s*[:\-]?\s*([А-ЯA-ZӘІҢҒҮҰҚӨҺ\s\n]+)", text, re.IGNORECASE)
-        
-        raw_fio = fio_match.group(1) if fio_match else None
-        fio = clean_fio(raw_fio)
+        # 1. Аты-жөнін жаңа смарт функциямен іздеу
+        fio = extract_fio_smart(text)
 
         # 2. (МКЗЖ)/ жолдарын санау
         mkzj_matches = re.findall(r"\(МКЗЖ\)/", text)
